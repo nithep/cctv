@@ -1,0 +1,41 @@
+# legacy-cctv — standalone public repo .gitignore
+# Secrets — ห้าม push
+scripts/pi-z2w-bot/config.yaml
+scripts/pi-z2w-bot/status.db
+scripts/pi-z2w-bot/*.log
+*.env
+.env.*
+
+# Outputs — ไม่ push (ใหญ่ + มีภาพ)
+output/**/*.mp4
+output/**/*.jpg
+output/**/*.jpeg
+output/**/*.png
+output/**/*.avi
+output/**/*.mov
+
+# Models — ใหญ่
+yolov8n.pt
+yolo*.pt
+*.pt
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+venv/
+.venv/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Secrets patterns
+**/password*.txt
+**/passwd*.txt
+
+# IDE
+.vscode/
+.idea/

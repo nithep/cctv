@@ -1,0 +1,37 @@
+# Pi Z2W Bot — config.yaml.example
+# คัดลอกเป็น config.yaml แล้วใส่รหัสจริง — ห้าม commit config.yaml (อยู่ใน .gitignore)
+
+nvr:
+  ip: 192.168.1.31
+  port: 8000
+  user: admin
+  pass: "CHANGE_ME"
+  check_interval: 60
+
+ipc:
+  - ip: 192.168.1.21
+    rtsp: "rtsp://admin:CHANGE_ME@192.168.1.21:554/ucast/11"
+    port: 80
+  # - ip: 192.168.1.22
+  #   rtsp: "rtsp://admin:CHANGE_ME@192.168.1.22:554/live/ch1"
+
+telegram:
+  token: "123456:ABC-CHANGE_ME"
+  allow_chat_ids: [123456789]
+
+smart_plug:
+  nvr_plug_ip: 192.168.1.40
+  ipc_plug_ip: 192.168.1.41
+  # ใช้ Tuya Local หรือ MQTT — ดู actions.py
+
+person:
+  enabled: true
+  model: yolov8n.pt
+  conf_threshold: 0.5
+  auto_interval: 30
+  cooldown: 300
+  save_dir: ../output/person
+
+pi:
+  hostname: cctv-pi-z2w
+  ip: 192.168.1.33

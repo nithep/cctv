@@ -1,0 +1,10 @@
+requests>=2.31
+python-telegram-bot>=20.7
+paho-mqtt>=1.6
+pyyaml>=6.0
+
+# Phase 3 — Person Filter (optional, Matebook/Pi4 only)
+# opencv-python>=4.8  # for image annotate + fallback
+# ultralytics>=8.0    # YOLOv8n (needs torch, ~6MB model yolov8n.pt)
+# torch>=2.0          # already present in some envs
+# Pillow>=10.0

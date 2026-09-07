@@ -1,0 +1,16 @@
+[Unit]
+Description=CCTV Pi Z2W Bot — monitors NVRmini2 + IPC
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/cctv-bot
+ExecStart=/home/pi/cctv-bot/venv/bin/python /home/pi/cctv-bot/bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
