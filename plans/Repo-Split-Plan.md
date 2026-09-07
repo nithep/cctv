@@ -2,9 +2,9 @@
 type: cctv_plan
 title: "Repo Split Plan — แยกรีโป Legacy CCTV ให้แชร์ได้ ใต้ T.C.Com ที่ไม่แชร์"
 date: 2026-09-08
-status: แผน — รอตัดสินใจก่อนแยก (Skill Legacy-CCTV พร้อมแล้ว)
-parent: T.C.Com (private, https://github.com/nithep/T.C.Com) — ไม่แชร์ business/resources
-child: legacy-cctv (แนะนำ public/private แชร์ได้, https://github.com/nithep/legacy-cctv)
+status: ✅ DONE 2026-09-08 — legacy-cctv public แจกฟรี, hermes-sentinel ยกเลิก, subtree push แล้ว
+parent: T.C.Com (private, https://github.com/nithep/T.C.Com) — ไม่แชร์ business/resources — 24d779d
+child: legacy-cctv (public, https://github.com/nithep/legacy-cctv) — MIT — fe455c4 subtree master
 ---
 
 # Repo Split Plan — Legacy CCTV แชร์ได้ ใต้ T.C.Com ที่ไม่แชร์
