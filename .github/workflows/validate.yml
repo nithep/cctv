@@ -1,0 +1,32 @@
+name: validate-legacy-cctv
+
+# ตรวจ policy ของ public repo: python compile ได้ · ไม่มี secret ถูก track · gitignore กันไฟล์อ่อนไหวครบ
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    name: Repo policy checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run repo policy check
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "🔍 ตรวจ policy + secret scan (public repo)..."
+          python3 scripts/check_repo_policy.py --quiet
+          echo "✅ Policy ผ่าน"
