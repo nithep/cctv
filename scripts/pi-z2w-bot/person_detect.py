@@ -16,6 +16,7 @@ Deps (optional):
 """
 
 import os
+import sys
 import time
 import logging
 from pathlib import Path
@@ -59,6 +60,39 @@ OUTPUT_DIR = _resolve_output_dir()
 _YOLO_MODEL = None
 _HAS_CV2 = None
 _HAS_YOLO = None
+_TORCH_OK = None
+
+
+def _torch_ok() -> bool:
+    """ตรวจว่า torch ใช้ได้จริงบน CPU นี้ — บาง wheel บน Pi โดน SIGILL (illegal instruction)
+    ตอน import/inference และ try/except กันไม่ได้ (process ตายทันที → bot crash loop)
+
+    จึงรันเช็คใน subprocess ลูก: import torch + conv เบา ๆ — ถ้าลูกโดน kill/timeout
+    ให้ถือว่า torch ใช้ไม่ได้ แล้ว fallback (ไม่ลาก process หลักตาย) — cache ผลครั้งเดียว
+    """
+    global _TORCH_OK
+    if _TORCH_OK is not None:
+        return _TORCH_OK
+    import subprocess as _sp
+    # ทดสอบแบบ "ของจริง": YOLO inference ใน subprocess ลูก (conv เล็ก ๆ ผ่าน แต่ inference
+    # 640px อาจโดน SIGILL ต่างกันได้ — เคยเจอกับ torch 2.14 wheel บน Pi4 Cortex-A72)
+    code = (
+        "import numpy as np\n"
+        "from ultralytics import YOLO\n"
+        "m = YOLO('yolov8n.pt')\n"
+        "m.predict(np.zeros((320, 320, 3), dtype='uint8'), verbose=False, imgsz=320)\n"
+    )
+    try:
+        r = _sp.run([sys.executable, "-c", code],
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, timeout=240,
+                    cwd=str(Path(__file__).parent))
+        _TORCH_OK = (r.returncode == 0)
+    except Exception:
+        _TORCH_OK = False
+    if not _TORCH_OK:
+        log.warning("torch ใช้ไม่ได้บน CPU นี้ (SIGILL/timeout) — ปิด YOLO ใช้ fallback แทน "
+                    "(แก้: pip install --force-reinstall torch torchvision ตัว aarch64 สำหรับ Pi4)")
+    return _TORCH_OK
 
 CONF_DEFAULT = 0.5
 MODEL_DEFAULT = "yolov8n.pt"
@@ -75,7 +109,7 @@ def _check_deps():
     if _HAS_YOLO is None:
         try:
             from ultralytics import YOLO  # noqa: F401
-            _HAS_YOLO = True
+            _HAS_YOLO = _torch_ok()  # import ผ่านอย่างเดียวไม่พอ — torch ต้อง compute ได้จริง
         except ImportError:
             _HAS_YOLO = False
     return _HAS_CV2, _HAS_YOLO
@@ -98,6 +132,8 @@ def get_yolo_model(model_name=MODEL_DEFAULT):
     if _YOLO_MODEL is not None:
         return _YOLO_MODEL
     _, has_yolo = _check_deps()
+    if not _torch_ok():
+        return None
     if not has_yolo:
         log.warning("ultralytics not installed — YOLO unavailable, fallback to motion")
         return None

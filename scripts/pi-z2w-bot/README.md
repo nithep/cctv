@@ -112,6 +112,18 @@ python cctv/scripts/pi-z2w-bot/person_detect.py --rtsp rtsp://admin:123456@192.1
 
 `person_detect.py` เก็บภาพที่มีคนไว้ที่ `cctv/output/person/person_*.jpg` (ไม่ commit)
 
+## Troubleshooting — Pi4 SIGILL (torch wheel เกิน CPU)
+
+อาการ: bot crash วนด้วย `Main process exited, code=killed, status=4/ILL` ประมาณ 10 วิหลัง log `YOLO model loaded`
+สาเหตุ: torch wheel ใหม่ (เช่น 2.14.0 บน Python 3.13) compile ด้วย instruction ที่ Cortex-A72 ไม่รองรับ — try/except กันไม่ได้ (process ตายทันที)
+แก้:
+
+```bash
+~/cctv-bot/venv/bin/pip install --force-reinstall torch==2.6.0 torchvision==0.21.0
+```
+
+กันไว้แล้วในโค้ด: `person_detect._torch_ok()` ทดสอบ YOLO inference จริงใน subprocess ลูกก่อนใช้ทุกครั้ง (cache ผล) — ถ้า torch พังจะปิด YOLO แล้ว fallback อย่างสง่างาม ไม่ลาก bot ตาย
+
 ## โครงสร้าง
 
 - `health.py` — check_nvr/check_ipc (tcp/http/rtsp)

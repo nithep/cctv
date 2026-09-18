@@ -9,5 +9,7 @@ pytest>=8.0
 # Phase 3 — Person Filter (optional, Matebook/Pi4 only)
 # opencv-python>=4.8  # for image annotate + fallback
 # ultralytics>=8.0    # YOLOv8n (needs torch, ~6MB model yolov8n.pt)
+# ⚠️ Pi4 (Cortex-A72/armv8.0): ใช้ torch==2.6.0 + torchvision==0.21.0 เท่านั้น —
+#    wheel ใหม่กว่า (เช่น 2.14.0) compile ด้วย instruction ที่ A72 ไม่รองรับ → SIGILL crash loop
 # torch>=2.0          # already present in some envs
 # Pillow>=10.0
