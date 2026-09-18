@@ -6,7 +6,9 @@ scripts/pi-z2w-bot/*.log
 *.env
 .env.*
 
-# Outputs — ไม่ push (ใหญ่ + มีภาพ)
+# Outputs — ไม่ push (ใหญ่ + มีภาพ + มีไฟล์อ่อนไหว เช่น cookies/nvr_config_backup)
+output/*
+!output/.gitkeep
 output/**/*.mp4
 output/**/*.jpg
 output/**/*.jpeg
