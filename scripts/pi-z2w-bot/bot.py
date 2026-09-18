@@ -212,8 +212,10 @@ def _ffmpeg_err_tail(res) -> str:
     return err.splitlines()[-1][:200] if err else f"exit code {getattr(res, 'returncode', '?')}"
 
 def _snapshot_cmd(ff, rtsp, out):
-    # -rw_timeout 10s = ตัดการเชื่อมต่อ RTSP ที่ค้าง เอง ไม่ต้องรอ timeout ของ subprocess
-    return [ff, "-y", "-hide_banner", "-loglevel", "error", "-rw_timeout", "10000000",
+    # หมายเหตุ: เคยใช้ -rw_timeout 10s แต่ ffmpeg >= 8 ตัด option นี้ทิ้ง
+    # ("Option not found" ทำให้ snapshot/clip พังทั้งยวง) — ตอนนี้พึ่ง
+    # subprocess timeout=15 (snapshot) / secs+15 (clip) ตัด RTSP ค้างแทน
+    return [ff, "-y", "-hide_banner", "-loglevel", "error",
             "-rtsp_transport", "tcp", "-i", rtsp, "-vframes", "1", "-q:v", "2", str(out)]
 
 async def cmd_snapshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -290,12 +292,12 @@ async def cmd_clip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tmp.unlink(missing_ok=True)  # ลบคลิปเก่าทิ้ง กันส่งคลิปเก่าซ้ำ
         except OSError:
             pass
-        cmd = [ff, "-y", "-hide_banner", "-loglevel", "error", "-rw_timeout", "10000000",
+        cmd = [ff, "-y", "-hide_banner", "-loglevel", "error",
                "-rtsp_transport", "tcp", "-i", rtsp, "-t", str(secs), "-c", "copy", str(tmp)]
         # ถ้า copy ไม่ได้ ให้ re-encode
         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=secs+15)
         if not tmp.exists() or tmp.stat().st_size < 5000:
-            cmd2 = [ff, "-y", "-hide_banner", "-loglevel", "error", "-rw_timeout", "10000000",
+            cmd2 = [ff, "-y", "-hide_banner", "-loglevel", "error",
                     "-rtsp_transport", "tcp", "-i", rtsp, "-t", str(secs), "-c:v", "libx264", "-preset", "ultrafast", str(tmp)]
             subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=secs+20)
         if tmp.exists() and tmp.stat().st_size > 5000:

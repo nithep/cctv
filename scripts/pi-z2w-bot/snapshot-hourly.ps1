@@ -18,7 +18,7 @@ New-Item -ItemType Directory -Force -Path $drive | Out-Null
 function Take-Snapshot {
     $ts = Get-Date -Format "yyyy-MM-dd_HH-mm"
     $out = Join-Path $drive "snapshot_$ts.jpg"
-    & $ff -y -hide_banner -loglevel error -rw_timeout 10000000 -rtsp_transport tcp -i rtsp://admin:123456@192.168.1.21:554/0 -vframes 1 -q:v 2 "$out" 2>&1 | Out-Null
+    & $ff -y -hide_banner -loglevel error -rtsp_transport tcp -i rtsp://admin:123456@192.168.1.21:554/0 -vframes 1 -q:v 2 "$out" 2>&1 | Out-Null
     if (Test-Path "$out") {
         Write-Host "$(Get-Date -Format HH:mm) snapshot $out $((Get-Item "$out").Length) bytes"
         return $true
