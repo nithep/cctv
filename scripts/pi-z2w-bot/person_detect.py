@@ -23,8 +23,37 @@ from datetime import datetime
 
 log = logging.getLogger("person_detect")
 
-OUTPUT_DIR = Path(__file__).parent.parent.parent / "output" / "person"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+def _resolve_output_dir() -> Path:
+    """หาโฟลเดอร์เก็บภาพ person ให้ได้จริงทั้งบน repo (Windows/Pi) และ deploy layout
+
+    บน deploy layout เช่น /home/ecs-agent/cctv-bot/person_detect.py การขึ้น 3 ชั้น
+    จะได้ /home ซึ่งสร้างโฟลเดอร์ไม่ได้ (PermissionError) — ให้ fallback ไปที่
+    ~/cctv-bot/output/person (หรือ ~/output/person) แทน และห้ามให้ crash ตอน import
+    ไม่งั้น bot.py ล้มทั้งตัว (เคยเกิด crash loop ~13k ครั้งบน Pi4 จากสาเหตุนี้)
+    """
+    candidates = [
+        Path(__file__).parent.parent.parent / "output" / "person",  # repo layout
+        Path.home() / "cctv-bot" / "output" / "person",             # deploy layout (~/cctv-bot)
+        Path.home() / "output" / "person",                          # deploy layout สำรอง
+    ]
+    for d in candidates:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+        except (OSError, PermissionError):
+            continue
+    # สุดท้าย: temp dir — ยังทำงานได้แม้เขียนถาวรไม่ได้เลย
+    import tempfile
+    d = Path(tempfile.gettempdir()) / "person"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except (OSError, PermissionError):
+        pass
+    return d
+
+
+OUTPUT_DIR = _resolve_output_dir()
 
 # Lazy globals
 _YOLO_MODEL = None

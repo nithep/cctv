@@ -12,12 +12,17 @@ ipc:
   - ip: 192.168.1.21
     rtsp: "rtsp://admin:CHANGE_ME@192.168.1.21:554/ucast/11"
     port: 80
+    # rtsp_sub: "rtsp://admin:CHANGE_ME@192.168.1.21:554/ucast/12"  # (ไม่ใส่ก็ได้ — /snapshot พลาด 2 ครั้งจะ fallback สตรีมย่อยอัตโนมัติ)
   # - ip: 192.168.1.22
   #   rtsp: "rtsp://admin:CHANGE_ME@192.168.1.22:554/live/ch1"
 
 telegram:
   token: "123456:ABC-CHANGE_ME"
   allow_chat_ids: [123456789]
+
+# Health alerts — เตือน Telegram เมื่อ ffmpeg หาย หรือ RTSP ล่มต่อเนื่องเกินกี่วินาที (300 = 5 นาที)
+alerts:
+  rtsp_down_secs: 300
 
 smart_plug:
   nvr_plug_ip: 192.168.1.40
@@ -31,6 +36,20 @@ person:
   auto_interval: 30
   cooldown: 300
   save_dir: ../output/person
+  # true = เปิด auto person watch เองตอน boot (ไม่ต้องสั่ง /person_auto on ใหม่หลัง restart)
+  auto_start: false
+  # กันบันทึกคนเดิมซ้ำ: คนที่ยังยืนหน้ากล้อง = 1 เหตุการณ์ (ไม่เซฟ/ไม่แจ้งซ้ำ)
+  # ปิดเหตุการณ์เมื่อไม่เจอคนต่อเนื่องเกินวินาทีนี้ → กลับมาเจอใหม่ = เหตุการณ์ใหม่
+  new_visit_gap: 600
+
+# Pi4 Event Recorder — อัดเฉพาะ event ลงเครื่อง Pi4 (NVR อัด Always ต่อไม่เกี่ยว)
+# record_on_person=true → /person_auto เจอคนแล้วอัดคลิปทันที + ส่งทั้งภาพ+คลิป
+# Z2W/SD card: ตั้ง record_on_person=false (SD พังไว) ใช้แค่ /clip ดูสด
+event_rec:
+  record_on_person: true
+  secs: 30
+  quota_mb: 4096
+  max_secs: 120
 
 pi:
   hostname: cctv-pi-z2w
