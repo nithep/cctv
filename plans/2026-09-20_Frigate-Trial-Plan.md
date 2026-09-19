@@ -2,7 +2,10 @@
 type: cctv_plan
 title: "Frigate Trial Plan — ทดลอง Software NVR แทนสมองเก่า เก็บตาเดิม"
 date: 2026-09-20
-status: PLAN — 2 ทางเลือก: MiniPC N100 (แนะนำระยะยาว) หรือ Pi 4 4GB (ทำได้ทันทีถ้ามีเครื่อง — ดู §2b)
+status: ❌ CANCELLED 2026-09-20 — ยกเลิกการทดลอง Frigate ใช้ระบบเดิมต่อ (Z2W watchdog + Gateway YOLO worker + NUUO อัดเทป)
+> **บันทึกการยกเลิก (2026-09-20):** ตัดสินใจไม่ทดลอง Frigate — เหตุผล: Gateway .94 (Pi 4 1GB) มีงาน snc ชุดใหญ่อยู่แล้วรับเพิ่มไม่ได้,
+> Pi 4 ใหม่ 4GB ต้องลงทุนเสริม (ไฟแท้/Coral) และระบบเดิม (Z2W + delegate YOLO + NUUO) ทำงานครบทุกฟังก์ชันแล้ว
+> — แผนเดิมคงไว้เป็นข้อมูลอ้างอิงหากกลับมาพิจารณาในอนาคต (folder frigate-pi4/ ลบออก ดูประวัติ commit 92d6058 ได้)
 parent: 2026-09-08_Master-Execution-Plan.md
 related: Phase4-Edge-Deploy-Report.md, docs/ip-map.md
 ---
