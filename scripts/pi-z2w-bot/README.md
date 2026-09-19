@@ -102,6 +102,14 @@ python health.py  # ต้องมี config.yaml ในโฟลเดอร�
 > Matebook D2019 RAM พอ — ติดตั้ง `pip install ultralytics opencv-python` แล้วรัน `/person` ได้เลย
 > Pi Z2W 512MB ไม่แนะนำรัน YOLO ต่อเนื่อง — ใช้ fallback motion หรือ NVR `SUPPORT_MOTION_RECORDING`
 
+### แบ่งงานข้ามเครื่อง (delegate) — Z2W สั่งเครื่องแรงทำ YOLO ผ่าน SSH
+
+- ตั้งใน `config.yaml`: `person: {delegate_ssh: "ecs-agent@192.168.1.94"}` — `/person` และ `/person_auto`
+  จะยิงคำสั่ง SSH ไปรัน `person_detect.py --rtsp <main>` บนเครื่องปลายทาง (ต้องมี `~/cctv-bot/` + venv ที่มี ultralytics)
+  แล้วดึงภาพที่เจอคนกลับมาส่ง Telegram — เครื่อง poller ไม่ต้องติด torch เลย
+- ใช้ `rtsp_main` (1080p) เสมอสำหรับสแกน; Z2W ตั้ง `ipc[0].rtsp` เป็น sub `/1` (360p) ไว้ใช้ health probe เบา ๆ แทน
+- ระบบที่ใช้จริง 2026-09-20: **Z2W = watchdog/poller**, **Gateway .94 = YOLO worker** (บอท Gateway ปิดแล้ว — poll ต้องมีตัวเดียว)
+
 ```powershell
 # บน Matebook D2019 (Windows)
 C:\Users\Nithep\AppData\Local\Programs\Python\Python312\Scripts\pip.exe install ultralytics opencv-python

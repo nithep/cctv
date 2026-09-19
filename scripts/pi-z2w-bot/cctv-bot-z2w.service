@@ -1,0 +1,20 @@
+[Unit]
+Description=CCTV Pi Z2W Watchdog Bot — monitors NVRmini2 + IPC (light build, no torch)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=admin
+WorkingDirectory=/home/admin/cctv-bot
+ExecStart=/home/admin/cctv-bot/venv/bin/python /home/admin/cctv-bot/bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+# Z2W มี RAM ~415MB — จำกัดบอท (ฉบับไม่มี torch ใช้ ~90MB) กันกินจนเครื่อง OOM
+MemoryMax=320M
+# ลดการเขียน SD — journal เก็บใน RAM/วนทับ
+LogLevelMax=info
+
+[Install]
+WantedBy=multi-user.target

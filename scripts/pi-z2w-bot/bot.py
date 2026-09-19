@@ -13,6 +13,7 @@ import asyncio
 import subprocess
 import yaml
 import sqlite3
+import json
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -71,6 +72,73 @@ rtsp_alert_sent = {}
 
 def load_cfg():
     return yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def _person_scan_delegated(cfg, conf):
+    """มอบงานสแกน YOLO ให้เครื่องอื่นทำผ่าน SSH (Z2W → Gateway/Pi4 ที่มี torch)
+
+    ตั้งค่าใน config.yaml:
+      person:
+        delegate_ssh: "ecs-agent@192.168.1.94"   # ว่าง = สแกนบนเครื่องนี้
+        delegate_ssh_key: ""                      # (ทางเลือก) path key เช่น ~/.ssh/id_ed25519
+
+    เครื่องปลายทางต้องมี ~/cctv-bot/{person_detect.py, venv, config ไม่จำเป็น}
+    คืน dict รูปแบบเดียวกับ person_detect.scan_snapshot() — None ถ้าไม่ได้ตั้ง delegate
+    """
+    p_cfg = cfg.get("person") or {}
+    target = p_cfg.get("delegate_ssh") or ""
+    if not target:
+        return None
+    ipc = cfg.get("ipc", [{}])[0]
+    # ใช้ main stream 1080p สำหรับ YOLO เสมอ (delegate ทำแทน ไม่ต้องกลัวหนัก)
+    rtsp = ipc.get("rtsp_main") or ipc.get("rtsp") or "rtsp://admin:123456@192.168.1.21:554/0"
+    key = p_cfg.get("delegate_ssh_key") or ""
+    ssh_base = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                "-o", "StrictHostKeyChecking=accept-new"]
+    if key:
+        ssh_base += ["-i", key]
+    remote_cmd = (f"cd ~/cctv-bot && ./venv/bin/python person_detect.py "
+                  f"--rtsp '{rtsp}' --conf {float(conf)}")
+    try:
+        r = subprocess.run(ssh_base + [target, remote_cmd],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+    except Exception as e:
+        return {"ok": False, "error": f"delegate ssh err: {e}"[:200],
+                "persons": [], "backend": "delegate", "image": None}
+    if r.returncode != 0:
+        err = (r.stderr.decode(errors="ignore") or f"delegate exit {r.returncode}")[:200]
+        return {"ok": False, "error": err, "persons": [], "backend": "delegate", "image": None}
+    try:
+        res = json.loads(r.stdout.decode(errors="ignore") or "{}")
+    except Exception as e:
+        return {"ok": False, "error": f"delegate json err: {e}"[:200],
+                "persons": [], "backend": "delegate", "image": None}
+    if not res:
+        return {"ok": False, "error": "delegate empty result", "persons": [], "backend": "delegate", "image": None}
+    # ภาพอยู่ฝั่ง delegate — ดึงกลับเฉพาะเมื่อเจอคน (กัน /tmp บน Z2W โดนกองทุก 30วิ)
+    img = res.get("saved") or res.get("image")
+    if res.get("ok") and res.get("has_person") and img:
+        local = Path("/tmp") / Path(img).name
+        scp_cmd = ["scp", "-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                   "-o", "StrictHostKeyChecking=accept-new"]
+        if key:
+            scp_cmd += ["-i", key]
+        try:
+            sr = subprocess.run(scp_cmd + [f"{target}:{img}", str(local)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+            if sr.returncode == 0 and local.exists() and local.stat().st_size > 1000:
+                if res.get("saved"):
+                    res["saved"] = str(local)
+                else:
+                    res["image"] = str(local)
+            else:
+                res["saved"] = None
+                res["image"] = None
+        except Exception as e:
+            log.warning(f"delegate scp img err: {e}")
+            res["saved"] = None
+            res["image"] = None
+    return res
 
 def init_db():
     con = sqlite3.connect(DB_PATH)
@@ -332,7 +400,10 @@ async def cmd_person(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
     await update.message.reply_text(f"กำลังสแกนหาคน (conf>{conf}) จาก {ipc.get('ip')} ...")
     try:
-        res = scan_snapshot(rtsp, conf=conf, save=True)
+        # ถ้าตั้ง person.delegate_ssh — มอบ YOLO ให้เครื่องอื่นทำ (Z2W ไม่มี torch)
+        res = _person_scan_delegated(cfg, conf)
+        if res is None:
+            res = scan_snapshot(rtsp, conf=conf, save=True)
         if not res.get("ok"):
             await update.message.reply_text(f"สแกนไม่สำเร็จ: {res.get('error')}")
             return
@@ -598,7 +669,10 @@ def person_watch_loop(cfg, tg_app):
                 ipc = cfg.get("ipc", [{}])[0]
                 rtsp = ipc.get("rtsp") or "rtsp://admin:123456@192.168.1.21:554/0"
                 conf = cfg.get("person", {}).get("conf_threshold", 0.5)
-                res = scan_snapshot(rtsp, conf=conf, save=False)
+                # delegate: สั่งสแกนผ่านเครื่องอื่นที่มี torch (Z2W → Gateway/Pi4) — None = สแกนบนเครื่องนี้
+                res = _person_scan_delegated(cfg, conf)
+                if res is None:
+                    res = scan_snapshot(rtsp, conf=conf, save=False)
                 if res.get("has_person"):
                     now = time.time()
                     last_seen_ts = now

@@ -41,6 +41,12 @@ person:
   # กันบันทึกคนเดิมซ้ำ: คนที่ยังยืนหน้ากล้อง = 1 เหตุการณ์ (ไม่เซฟ/ไม่แจ้งซ้ำ)
   # ปิดเหตุการณ์เมื่อไม่เจอคนต่อเนื่องเกินวินาทีนี้ → กลับมาเจอใหม่ = เหตุการณ์ใหม่
   new_visit_gap: 600
+  # มอบงาน YOLO ให้เครื่องอื่นผ่าน SSH (สำหรับ Z2W/เครื่องไม่มี torch)
+  # ตัวอย่าง: delegate_ssh: "ecs-agent@192.168.1.94"  (ว่าง = สแกนบนเครื่องนี้)
+  # เครื่องปลายทางต้องมี ~/cctv-bot/{person_detect.py, venv มี ultralytics}
+  # ใส่ delegate_ssh_key: "~/.ssh/id_ed25519" ถ้าไม่ได้ใช้ key default
+  delegate_ssh: ""
+  delegate_ssh_key: ""
 
 # Pi4 Event Recorder — อัดเฉพาะ event ลงเครื่อง Pi4 (NVR อัด Always ต่อไม่เกี่ยว)
 # record_on_person=true → /person_auto เจอคนแล้วอัดคลิปทันที + ส่งทั้งภาพ+คลิป

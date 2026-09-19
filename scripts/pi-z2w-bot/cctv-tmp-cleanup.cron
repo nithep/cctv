@@ -1,0 +1,9 @@
+# cctv-tmp-cleanup — เก็บกวาดไฟล์ชั่วคราวของ YOLO worker ที่ /tmp
+# ต้นทาง: scripts/pi-z2w-bot/cctv-tmp-cleanup.cron
+# ติดตั้งบนเครื่อง worker (เช่น Gateway 192.168.1.94):
+#   sudo cp cctv-tmp-cleanup.cron /etc/cron.d/cctv-tmp-cleanup
+#   sudo chmod 644 /etc/cron.d/cctv-tmp-cleanup
+# ไฟล์ที่เกิดจาก person_detect.py: /tmp/person_snap_*.jpg และ /tmp/clip_frames_*/
+# เก็บไว้ไม่เกิน 24 ชม. — รันทุกชั่วโมง (นาที 17/23 กันชนกับงานอื่น)
+17 * * * * ecs-agent find /tmp -maxdepth 1 -name "person_snap_*.jpg" -mmin +1440 -delete
+23 * * * * ecs-agent find /tmp -maxdepth 1 -type d -name "clip_frames_*" -mmin +1440 -exec rm -rf {} +

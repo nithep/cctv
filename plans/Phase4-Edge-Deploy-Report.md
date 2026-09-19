@@ -3,12 +3,21 @@ type: cctv_report
 title: "Phase 4 — เลือก Edge และเตรียม Deploy (Z2W vs Pi4 vs MiniPC)"
 date: 2026-09-08 01:38
 project: HMS-2026-001 Hermes Sentinel
-status: PLAN พร้อม deploy — รอเลือก hardware ตาม benchmark
-edge_ip: 192.168.1.33 (จอง)
-matebook: 192.168.1.44 Dev host (poll 60s + YOLO 5.34s/frame)
+status: ✅ DEPLOYED 2026-09-20 — Z2W .20 = watchdog/poller (poll Telegram ตัวเดียว) + Gateway .94 = YOLO worker (delegate SSH) — รายละเอียดด้านล่าง
+edge_ip: 192.168.1.20 (Pi Z2W — deploy แล้ว)
+matebook: 192.168.1.44 Dev host (ไม่รันบอท runtime แล้ว)
 ---
 
 # Phase 4 — Edge Deploy Plan
+
+> **อัปเดต 2026-09-20 — deploy จริงเสร็จ (สถาปัตยกรรม 2 ระดับ):**
+>
+> | เครื่อง | บทบาทจริง | สถานะ |
+> |---|---|---|
+> | **Pi Z2W `192.168.1.20`** (user `admin`, WiFi) | **Watchdog + poller หลัก** — `cctv-bot.service` (unit: `cctv-bot-z2w.service`, MemoryMax 320M) health 60s + Telegram poll + /status /snapshot /clip (ใช้ rtsp sub `/1` 360p — main `/0` 1080p ล้มบน WiFi) | ✅ active/enabled — health NVR/IPC/rtsp ผ่านครบ |
+> | **Gateway `192.168.1.94`** (RPi 1GB, user `ecs-agent`) | **YOLO worker** — บอท watchdog **ปิด + disable แล้ว** (poll ต้องมีตัวเดียว) — รับงาน `/person` `/person_auto` จาก Z2W ผ่าน SSH (`person.delegate_ssh`) + cron `/etc/cron.d/cctv-tmp-cleanup` เก็บกวาด /tmp ทุกชม. (ไฟล์เกิน 24ชม.) | ✅ RAM คืน ~160MB หลังปิดบอท |
+>
+> แผนเดิมด้านล่างคือบันทึกกระบวนการ (benchmark ยังใช้อ้างอิงได้) — ทางเลือกที่เลือกจริงคือ A ผสม B: Z2W ทำ watchdog แต่ **ไม่โหลด torch** ส่งงาน YOLO ข้ามเครื่องแทน (ฟีเจอร์ delegate ใน `bot.py` + เอกสาร `README.md` §delegate)
 
 > ต่อจาก Phase 3 ที่ YOLO บน Matebook ทำงานแล้ว (bus 3 คน 5.34s) — Phase 4 ต้องย้าย bot จาก Matebook (dev) → Edge 24/7
 > แผนนี้สรุปตัวเลือกตาม benchmark จริง + เตรียม deploy script + service
