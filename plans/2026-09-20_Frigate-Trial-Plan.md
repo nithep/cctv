@@ -2,7 +2,7 @@
 type: cctv_plan
 title: "Frigate Trial Plan — ทดลอง Software NVR แทนสมองเก่า เก็บตาเดิม"
 date: 2026-09-20
-status: PLAN — รอเลือก hardware (แนะนำ MiniPC N100 ที่ .33)
+status: PLAN — 2 ทางเลือก: MiniPC N100 (แนะนำระยะยาว) หรือ Pi 4 4GB (ทำได้ทันทีถ้ามีเครื่อง — ดู §2b)
 parent: 2026-09-08_Master-Execution-Plan.md
 related: Phase4-Edge-Deploy-Report.md, docs/ip-map.md
 ---
@@ -33,10 +33,57 @@ related: Phase4-Edge-Deploy-Report.md, docs/ip-map.md
 
 **จอง IP:** `192.168.1.33` (ตาม ip-map — ช่องว่างเตรียมไว้แล้ว)
 
+## 2b) รันบน Pi 4 4GB — ตัวเลือก "ทำได้ทันที"
+
+> Frigate ยังรองรับ Pi 4 อย่างเป็นทางการ (image arm64 เดียวกัน) เหมาะกับ **1-2 กล้องเท่านั้น** — เงื่อนไข 3 ข้อ:
+
+| เงื่อนไข | รายละเอียด | งบเพิ่ม |
+|---|---|---|
+| **USB SSD** (บังคับ) | SD เก็บ OS อย่างเดียว — เทปวิดีโอเขียนลง SD แล้วพังในไม่กี่เดือน; mount แบบ ext4 | ~1,000-1,500฿ |
+| **แหล่งจ่ายไฟแท้ 5.1V/3A** | จ่ายไม่พอ → crash กลางคืน + throttle (ตรวจ `vcgencmd get_throttled`) | ถ้าไม่มี ~400฿ |
+| **Coral USB TPU** (แนะนำ) | CPU detector บน Pi4 ได้ ~0.5-1 fps (พอ 1 กล้อง fps 5 แบบหยั่งรู้); Coral ทำ ~10-20ms เต็มสมรรถนะ — ใช้โมเดล default (ssdlite mobilenet) **YOLOv8n ไม่รันบน Coral** | ~1,800฿ |
+
+**docker-compose เฉพาะ Pi 4** (ต่างจาก MiniPC ที่ device):
+
+```yaml
+# /opt/frigate/docker-compose.yml บน .33 (Pi 4)
+services:
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:stable
+    container_name: frigate
+    restart: unless-stopped
+    privileged: true
+    shm_size: "128mb"          # 1-2 กล้องพอ
+    devices:
+      - /dev/video11:/dev/video11   # VideoCore v4l2m2m (h264 hw decode ของ Pi)
+    volumes:
+      - ./config:/config
+      - /mnt/frigate-media:/media/frigate   # USB SSD — บังคับ ห้ามเก็บลง SD
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "5000:5000"
+      - "8554:8554"
+```
+
+**config.yml เฉพาะ Pi 4** (เพิ่มทับส่วน detectors/ffmpeg ของ §5):
+
+```yaml
+ffmpeg:
+  hwaccel_args: preset-rpi-64-h264   # ใช้ VideoCore decode แทน CPU — ขาดตัวนี้ CPU ล้นทันที
+detectors:
+  coral:
+    type: edgetpu
+    device: usb
+  # ถ้ายังไม่มี Coral: ลบ detectors ออกทั้งหมด → Frigate ใช้ CPU detector เอง (ช้ากว่าแต่ใช้ได้ทดลอง)
+```
+
+**ข้อจำกัดที่ต้องรับรู้ (vs MiniPC):** RAM 4GB ใกล้เพดานถ้าเปิด UI ตลอด + หลายกล้อง, ขยายเกิน 2-3 กล้องไม่ไหว,
+และเอกสารทางการ Frigate เลิกเป็นแนวแนะนำหลักของ Pi 4 แล้ว (ยัง support) — **ถ้าเป็นแค่ทดลอง 1 กล้อง 2 สัปดาห์: ใช้ได้เต็มที่**
+
 ## 3) ขั้นตอนทดลอง (ขนาน ไม่แตะระบบเดิม)
 
 ### สัปดาห์ 1 — ติดตั้ง + ดูภาพ
-- [ ] ติดตั้ง Debian 13 + Docker บน MiniPC `.33` (static IP + DHCP reservation)
+- [ ] ติดตั้ง Raspberry Pi OS Lite 64-bit (Debian 13) + Docker บน Pi 4 `.33` (static IP + DHCP reservation) — OS ลง SD เท่านั้น, mount USB SSD ที่ `/mnt/frigate-media`
 - [ ] รัน stack: `go2rtc` (RTSP gateway) + `Frigate` (docker-compose ด้านล่าง)
 - [ ] ต่อ stream กล้อง Seetong: detect ใช้ sub `/1` (360p เบา), record ใช้ main `/0` (1080p)
 - [ ] ต่อ USB HDD/SSD เก็บเทป (ห้ามเก็บลง SD)
