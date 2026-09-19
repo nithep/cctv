@@ -13,6 +13,7 @@ updated: 2026-09-20
 |---|---|---|---|---|---|---|
 | 1 | **NUUO NVRmini 2** (lighttpd/PHP) | `192.168.1.31:8000` | `94:de:80:9d:53:f1` | 8000 (web), 80? | ✅ Online — login page `200 OK`, `TcpTestSucceeded` | `PROJECT_NAME=NVRmini 2 fw 03.11.0000.0005`, `LIVE_STREAM_MAX_CONN 64` |
 | 2 | **Seetong IPC** (gSOAP/2.8) | `192.168.1.21:80` | `00:4A:7B:3E:00:61` | 80 (web), 554 (RTSP) | ✅ Online — `gSOAP/2.8 200 OK`, `554 open`, Cloud `1666840.seetong.com` Status 1 | Static IP, Gateway `192.168.1.1`, DNS `203.113.111.162`/`192.168.1.1`, ใช้ UC2 4.7 ตั้งค่า |
+| 2b | **Hi-View HW-33ROBOT30W Robot** (happytime RTSP) | `192.168.1.2` | — | 554 (RTSP 401 locked), 80 (nginx 404) | ⏳ Pending — รอ HW/รหัส (NVR CH0 เคย Disconnect, แอป hiviewwifi) | รายละเอียด `docs/2026-09-20_Robot-Cam-192.168.1.2-Pending.md` |
 | 3 | **NVRmini 2 — Storage Server หลัก** | `192.168.1.31:8000` | `94:de:80:9d:53:f1` | 8000, RAID | ✅ ใช้เป็น Server เก็บ (IPC ส่งอย่างเดียว) | IPC → NVR เก็บ ไม่ต้องสร้าง .32 แยก |
 | 4 | **Matebook D2019 — Dev Host** | `192.168.1.44` | MatebookD2019 | — | 🛠 Dev/เอกสาร | ไม่รันบอท runtime แล้ว (ย้ายไป Z2W 20/9) — ใช้ dev/ssh จัดการระบบ |
 | 5 | **Pi Zero 2 W — Watchdog Bot (รันจริง)** | `192.168.1.20` | `2c:cf:67:8e:f2:b1` | — | ✅ **cctv-bot active (WiFi)** | health 60s + poll Telegram + /snapshot /clip (rtsp sub `/1`) + **/picam (OV5647 CSI local, rotation 180)** — สแกนคนฝาก Gateway; RAM 415MB จำกัด MemoryMax 320M, `record_on_person: false` กัน SD |
