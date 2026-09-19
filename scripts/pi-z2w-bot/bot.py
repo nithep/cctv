@@ -41,6 +41,13 @@ try:
 except ImportError:
     HAS_REC = False
 
+# Local Pi Camera (CSI ov5647 บน Z2W — ไม่ผ่าน RTSP)
+try:
+    from picam import capture as picam_capture
+    HAS_PICAM = True
+except ImportError:
+    HAS_PICAM = False
+
 CONFIG_PATH = Path(__file__).with_name("config.yaml")
 DB_PATH = Path(__file__).with_name("status.db")
 FAIL_THRESHOLD = 3
@@ -239,7 +246,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"EventRec: ✅ พร้อม (เฉพาะ event {rec_cfg.get('secs', 30)}วิ quota {rec_cfg.get('quota_mb', 4096)}MB)")
     else:
         lines.append("EventRec: ❌ (ไม่มี event_record.py — ใช้ /clip แทน)")
-    lines.append(f"\nคำสั่ง: /snapshot /clip [วินาที] /person [/person_auto] /rec [วินาที] /events [/event #] /status /reboot")
+    lines.append(f"PiCam: {'✅ พร้อม /picam' if HAS_PICAM else '❌ (ไม่มี picam.py)'}")
+    lines.append(f"\nคำสั่ง: /snapshot /picam /clip [วินาที] /person [/person_auto] /rec [วินาที] /events [/event #] /status /reboot")
     await update.message.reply_text("\n".join(lines)[:4000])
 
 def _ffmpeg_found():
@@ -254,6 +262,23 @@ def _ffmpeg_found():
 
 def _ffmpeg_bin():
     return _ffmpeg_found() or "ffmpeg"
+
+def _shrink_for_tg(src: Path, max_w: int = 960) -> Path:
+    """ย่อภาพก่อนอัปโหลดขึ้น Telegram — Z2W ต่อ WiFi อัปโหลด 1.2MB เต็ม
+    ชอบ timeout (PTB write_timeout 5s) ย่อเหลือ ~960px (~100-200KB) ส่งผ่านชัวร์
+    คืน path ไฟล์ย่อ ถ้าย่อไม่ได้คืนไฟล์เดิม"""
+    try:
+        ff = _ffmpeg_bin()
+        dst = src.with_name(src.stem + "_small.jpg")
+        r = subprocess.run(
+            [ff, "-y", "-hide_banner", "-loglevel", "error",
+             "-i", str(src), "-vf", f"scale={max_w}:-1", "-q:v", "5", str(dst)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        if dst.exists() and dst.stat().st_size > 1000:
+            return dst
+    except Exception as e:
+        log.warning(f"shrink err: {e}")
+    return src
 
 def _tmp_file(name):
     """ไฟล์ชั่วคราว: /tmp บน Pi/POSIX, %TEMP% บน Windows"""
@@ -382,6 +407,46 @@ async def cmd_clip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
+
+async def cmd_picam(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/picam — ถ่ายจากกล้อง CSI บน Z2W (ov5647) ส่งเป็นรูป"""
+    if not HAS_PICAM:
+        await update.message.reply_text("PiCam ยังไม่พร้อม — ไม่มี picam.py บนเครื่องนี้")
+        return
+    # กันสั่ง /picam ซ้ำซ้อน — rpicam เปิดกล้องได้ทีละตัว ชนกันแล้วช้าจน timeout
+    lock = context.application.bot_data.setdefault("picam_lock", asyncio.Lock())
+    if lock.locked():
+        await update.message.reply_text("กำลังถ่ายอยู่ รอสักครู่แล้วลองใหม่")
+        return
+    async with lock:
+        tmp = _tmp_file("picam_snapshot.jpg")
+        await update.message.reply_text("กำลังถ่ายจากกล้อง Z2W (ov5647) ...")
+        small = None
+        try:
+            loop = asyncio.get_running_loop()
+            res = await loop.run_in_executor(None, lambda: picam_capture(str(tmp)))
+            if not res.get("ok"):
+                await update.message.reply_text(f"ถ่ายไม่สำเร็จ: {res.get('error')}")
+                return
+            small = _shrink_for_tg(Path(res["file"]))  # ย่อก่อนส่ง กัน upload timeout บน WiFi
+            with open(small, "rb") as f:
+                await update.message.reply_photo(
+                    photo=f,
+                    caption=f"PiCam Z2W {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {small.stat().st_size//1024}KB")
+            log.info(f"picam sent to {update.effective_chat.id}")
+        except Exception as e:
+            log.exception("picam err")
+            await update.message.reply_text(f"picam error: {e}")
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            try:
+                if small and Path(small) != tmp:
+                    Path(small).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 async def cmd_person(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Phase 3: /person — สแกนภาพล่าสุดหา 'คน' ด้วย YOLOv8n"""
@@ -541,9 +606,13 @@ def start_telegram(cfg):
         log.warning("Telegram disabled (no token or lib)")
         return None
     token = cfg["telegram"]["token"]
-    app = Application.builder().token(token).build()
+    # timeout เผื่อ Z2W WiFi อัปโหลดช้า — default PTB write_timeout แค่ 5s ส่งรูป 1MB+ ไม่ผ่าน
+    app = (Application.builder().token(token)
+           .connect_timeout(15).read_timeout(30).write_timeout(30).pool_timeout(10)
+           .build())
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("snapshot", cmd_snapshot))
+    app.add_handler(CommandHandler("picam", cmd_picam))
     app.add_handler(CommandHandler("clip", cmd_clip))
     if HAS_PERSON:
         app.add_handler(CommandHandler("person", cmd_person))
