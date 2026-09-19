@@ -1,4 +1,4 @@
-name: validate-legacy-cctv
+name: validate-cctv
 
 # ตรวจ policy ของ public repo: python compile ได้ · ไม่มี secret ถูก track · gitignore กันไฟล์อ่อนไหวครบ
 on:

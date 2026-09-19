@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ตรวจ policy ของ repo legacy-cctv (public repo) ก่อน merge/push — ใช้ stdlib + git เท่านั้น
+"""ตรวจ policy ของ repo cctv (public repo) ก่อน merge/push — ใช้ stdlib + git เท่านั้น
 
 Usage: python3 scripts/check_repo_policy.py [--quiet]
 

@@ -1,8 +1,8 @@
-# legacy-cctv — ระบบคืนชีพ CCTV ตกรุ่นไร้ Support (แจกฟรี Public)
+# cctv — ระบบคืนชีพ CCTV ตกรุ่นไร้ Support (แจกฟรี Public)
 
 > **Public Free** — แจกฟรีสำหรับช่าง/ร้านที่เจอ NVR/IPC ตกรุ่นเหมือนกัน
 > แยกจาก `T.C.Com` vault ที่เป็น private — ไม่มีข้อมูลลูกค้า/บัญชีหลุด
-> โครงการเดิม `HMS-2026-001 Hermes Sentinel` ยกเลิกชื่อรีโป `hermes-sentinel` — ใช้ `legacy-cctv` แทน
+> โครงการเดิม `HMS-2026-001 Hermes Sentinel` ยกเลิกชื่อรีโป `hermes-sentinel` — ใช้ `cctv` แทน
 
 ## ทำอะไรได้
 
@@ -25,8 +25,8 @@ raw/        — ข้อมูลดิบ
 ## เริ่มใช้ (3 นาที)
 
 ```bash
-git clone https://github.com/nithep/legacy-cctv.git
-cd legacy-cctv/scripts/pi-z2w-bot
+git clone https://github.com/nithep/cctv.git
+cd cctv/scripts/pi-z2w-bot
 cp config.yaml.example config.yaml   # ใส่ pass/token จริง — ห้าม commit
 pip install -r requirements.txt       # + ultralytics opencv-python ถ้าจะใช้ YOLO
 python health.py                      # ต้องได้ NVR True IPC True rtsp ok
@@ -49,7 +49,7 @@ MIT — แจกฟรี ใช้ได้ แก้ได้ ขายได
 
 - สร้างจากงานจริง Matebook D2019 + NUUO NE-2020 + Seetong IPC `192.168.1.21:554/0`
 - เอกสารส่งมอบ `output/handover-2026-09-08.md`
-- Skill เฉพาะทาง `.agents/skills/Legacy-CCTV/SKILL.md` ใน T.C.Com vault (private)
+- Skill เฉพาะทาง `.agents/skills/cctv/SKILL.md` ใน T.C.Com vault (private)
 
 ## ติดต่อ / Issue
 
