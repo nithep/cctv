@@ -9,8 +9,10 @@
 - `/snapshot` — ดึงภาพล่าสุด 1080p จาก IPC 192.168.1.21 (ลอง main 2 ครั้ง + sub stream 1 ครั้ง)
 - `/clip [วินาที]` — ดึงคลิป 5-30s มาดูอย่างเดียว (ไม่เก็บ)
 - `/rec [วินาที]` — **Pi4 เท่านั้น:** บันทึก event ลงเครื่องทันที (default 30วิ, สูงสุด 120วิ) + ส่งคลิปให้
-- `/person [conf]` — Phase 3: สแกนภาพล่าสุดหา 'คน' ด้วย YOLOv8n (เช่น `/person 0.6`)
-- `/person_auto [on/off]` — เปิด/ปิด auto scan ทุก 30วิ — **dedup แบบ "การเยี่ยม"**: คนที่ยังยืนหน้ากล้อง = 1 เหตุการณ์ (ไม่เซฟไฟล์ซ้ำ/ไม่แจ้งซ้ำ) หายไปเกิน `person.new_visit_gap` (default 600วิ) แล้วกลับมา = เหตุการณ์ใหม่; Pi4 + `record_on_person:true` จะแนบคลิป event มาด้วย
+- `/person [conf] [clip_secs]` — Phase 3: สแกนภาพล่าสุดหา 'คน' ด้วย YOLOv8n (เช่น `/person 0.6`, `/person 0.35 5` = โหวต 5 เฟรมจับครึ่งตัว/เดินผ่านเร็ว) — default `conf 0.35 + imgsz 960` จาก `config.yaml`
+- `/picam_person [conf]` — **PiCam CSI เท่านั้น:** ถ่าย `ov5647` แล้ว `scp` ภาพขึ้นเครื่อง delegate (`.94`/Pi4) ให้ YOLO สแกนครึ่งตัว (`/person` ใช้กับ IPC RTSP ส่วนคำสั่งนี้ใช้กับ PiCam ที่ไม่มี RTSP)
+- `/picam_auto [on/off]` — เปิด/ปิด auto PiCam ทุก 90วิ (ถ่าย CSI → delegate YOLO อัตโนมัติ, visit dedup กันคนนั่งเดิมแจ้งซ้ำ, Z2W ส่งแค่ภาพนิ่งไม่บันทึกคลิปกัน SD พัง)
+- `/person_auto [on/off]` — เปิด/ปิด auto scan ทุก 15วิ (โหวต `clip_secs: 5` เฟรม — มีคนแค่ 1-2 เฟรมก็นับว่าเจอ) — **dedup แบบ "การเยี่ยม"**: คนที่ยังยืนหน้ากล้อง = 1 เหตุการณ์ (ไม่เซฟไฟล์ซ้ำ/ไม่แจ้งซ้ำ) หายไปเกิน `person.new_visit_gap` (default 600วิ) แล้วกลับมา = เหตุการณ์ใหม่; Pi4 + `record_on_person:true` จะแนบคลิป event มาด้วย
 - `/events [จำนวน]` — รายการเหตุการณ์ "พบคน" ย้อนหลัง (เก็บใน status.db → `person_events` 1 แถวต่อการเยี่ยม)
 - `/event <หมายเลข>` — เรียกภาพ/คลิปของเหตุการณ์ย้อนหลังส่งเข้าแชท (ถ้าไฟล์ยังไม่โดน quota prune)
 - `/reboot` — สั่ง power cycle (ต้องต่อ actions.py กับ Smart Plug ก่อน)

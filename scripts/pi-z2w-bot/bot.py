@@ -28,11 +28,19 @@ except ImportError:
 from health import check_nvr, check_ipc
 
 # Phase 3: Person detection (optional deps: ultralytics, opencv)
+# conf 0.35 + imgsz 960 (เดิม 0.5/640) — จับคนครึ่งตัว/หัวโผล่/ตัวเล็กได้
+# (YOLO เจอจริง conf ~0.25-0.45 แต่เดิมโดนทิ้ง) — false positive กันด้วย
+# cooldown 300s + visit dedup 600s ที่มีอยู่แล้ว
 try:
-    from person_detect import scan_snapshot, detect_person, annotate_image, OUTPUT_DIR, _check_deps as _person_check_deps
+    from person_detect import (scan_snapshot, scan_clip, detect_person,
+                               annotate_image, OUTPUT_DIR,
+                               CONF_DEFAULT, IMGSZ_DEFAULT,
+                               _check_deps as _person_check_deps)
     HAS_PERSON = True
 except ImportError:
     HAS_PERSON = False
+    CONF_DEFAULT = 0.35
+    IMGSZ_DEFAULT = 960
 
 # Pi4 Event Recorder (optional — บันทึกเฉพาะ event ลงเครื่อง Pi4)
 try:
@@ -62,7 +70,9 @@ log = logging.getLogger("cctv-bot")
 fail_count = {}
 last_alert = {}
 person_auto_enabled = False
+picam_auto_enabled = False
 last_person_alert = 0
+last_picam_alert = 0.0
 
 # Person "visit" dedup — คนเดิมที่ยังยืนหน้ากล้อง = เหตุการณ์เดียว ไม่เซฟ/ไม่แจ้งซ้ำ
 # ปิดเหตุการณ์เมื่อไม่เจอคนต่อเนื่องเกิน NEW_VISIT_GAP_SEC → กลับมาเจอใหม่ = เริ่ม event ใหม่
@@ -81,7 +91,7 @@ def load_cfg():
     return yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
-def _person_scan_delegated(cfg, conf):
+def _person_scan_delegated(cfg, conf, imgsz=None, clip_secs=0):
     """มอบงานสแกน YOLO ให้เครื่องอื่นทำผ่าน SSH (Z2W → Gateway/Pi4 ที่มี torch)
 
     ตั้งค่าใน config.yaml:
@@ -91,6 +101,9 @@ def _person_scan_delegated(cfg, conf):
 
     เครื่องปลายทางต้องมี ~/cctv-bot/{person_detect.py, venv, config ไม่จำเป็น}
     คืน dict รูปแบบเดียวกับ person_detect.scan_snapshot() — None ถ้าไม่ได้ตั้ง delegate
+
+    clip_secs > 0 = สแกนแบบโหวตหลายเฟรม (scan_clip) จับคนเดินผ่านเร็ว/ครึ่งตัว
+    (มีคนแค่ 1-2 เฟรมจาก 5 ก็นับว่าเจอ) — แทนเฟรมเดียวที่พลาดจังหวะง่าย
     """
     p_cfg = cfg.get("person") or {}
     target = p_cfg.get("delegate_ssh") or ""
@@ -100,12 +113,17 @@ def _person_scan_delegated(cfg, conf):
     # ใช้ main stream 1080p สำหรับ YOLO เสมอ (delegate ทำแทน ไม่ต้องกลัวหนัก)
     rtsp = ipc.get("rtsp_main") or ipc.get("rtsp") or "rtsp://admin:123456@192.168.1.21:554/0"
     key = p_cfg.get("delegate_ssh_key") or ""
+    eff_imgsz = int(imgsz or p_cfg.get("imgsz") or IMGSZ_DEFAULT)
+    eff_clip = int(clip_secs or p_cfg.get("clip_secs") or 0)
     ssh_base = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                 "-o", "StrictHostKeyChecking=accept-new"]
     if key:
         ssh_base += ["-i", key]
-    remote_cmd = (f"cd ~/cctv-bot && ./venv/bin/python person_detect.py "
-                  f"--rtsp '{rtsp}' --conf {float(conf)}")
+    if eff_clip > 0:
+        clip_flag = " --clip " + str(eff_clip)
+    else:
+        clip_flag = ""
+    remote_cmd = "cd ~/cctv-bot " + "&& ./venv/bin/python person_detect.py --rtsp '" + rtsp + "' --conf " + str(float(conf)) + " --imgsz " + str(eff_imgsz) + clip_flag
     try:
         r = subprocess.run(ssh_base + [target, remote_cmd],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
@@ -131,7 +149,7 @@ def _person_scan_delegated(cfg, conf):
         if key:
             scp_cmd += ["-i", key]
         try:
-            sr = subprocess.run(scp_cmd + [f"{target}:{img}", str(local)],
+            sr = subprocess.run(scp_cmd + [target + ":" + img, str(local)],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
             if sr.returncode == 0 and local.exists() and local.stat().st_size > 1000:
                 if res.get("saved"):
@@ -142,10 +160,91 @@ def _person_scan_delegated(cfg, conf):
                 res["saved"] = None
                 res["image"] = None
         except Exception as e:
-            log.warning(f"delegate scp img err: {e}")
+            log.warning("delegate scp img err: " + str(e))
             res["saved"] = None
             res["image"] = None
     return res
+
+
+def _person_scan_image_delegated(cfg, local_image, conf, imgsz=None):
+    """ส่งไฟล์ภาพ local (เช่น PiCam CSI /tmp/picam_snapshot.jpg) ไปให้ YOLO ฝั่ง delegate สแกน
+
+    ใช้กับกล้องที่ไม่มี RTSP (PiCam ov5647 เสียบ CSI ตรง) — delegate ดึง RTSP เองไม่ได้
+    flow: scp ภาพขึ้น target:/tmp/ -> ssh person_detect.py --image -> ดึง annotated กลับ
+    คืน dict {ok, persons, backend, image/saved} — None ถ้าไม่ได้ตั้ง delegate_ssh
+    """
+    p_cfg = cfg.get("person") or {}
+    target = p_cfg.get("delegate_ssh") or ""
+    if not target:
+        return None
+    key = p_cfg.get("delegate_ssh_key") or ""
+    eff_imgsz = int(imgsz or p_cfg.get("imgsz") or IMGSZ_DEFAULT)
+    src = Path(local_image)
+    if not src.exists():
+        return {"ok": False, "error": "local image not found", "persons": [], "backend": "delegate", "image": None}
+    ssh_base = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                "-o", "StrictHostKeyChecking=accept-new"]
+    scp_base = ["scp", "-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                "-o", "StrictHostKeyChecking=accept-new"]
+    if key:
+        ssh_base += ["-i", key]
+        scp_base += ["-i", key]
+    remote_img = "/tmp/picam_" + str(int(time.time())) + "_" + src.name
+    try:
+        up = subprocess.run(scp_base + [str(src), target + ":" + remote_img],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    except Exception as e:
+        return {"ok": False, "error": "delegate upload err: " + str(e)[:200],
+                "persons": [], "backend": "delegate", "image": None}
+    if up.returncode != 0:
+        err = (up.stderr.decode(errors="ignore") or "delegate upload exit " + str(up.returncode))[:200]
+        return {"ok": False, "error": err, "persons": [], "backend": "delegate", "image": None}
+    remote_cmd = ("cd ~/cctv-bot && ./venv/bin/python person_detect.py --image '"
+                  + remote_img + "' --conf " + str(float(conf)) + " --imgsz " + str(eff_imgsz))
+    try:
+        r = subprocess.run(ssh_base + [target, remote_cmd],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+    except Exception as e:
+        return {"ok": False, "error": "delegate ssh err: " + str(e)[:200],
+                "persons": [], "backend": "delegate", "image": None}
+    if r.returncode != 0:
+        err = (r.stderr.decode(errors="ignore") or "delegate exit " + str(r.returncode))[:200]
+        return {"ok": False, "error": err, "persons": [], "backend": "delegate", "image": None}
+    try:
+        # stdout ปนบรรทัด "annotated -> ..." กับ JSON — ตัดเอาเฉพาะก้อน {..} ท้ายสุด
+        text = r.stdout.decode(errors="ignore") or ""
+        start = text.rfind("{")
+        end = text.rfind("}")
+        if start < 0 or end < 0 or end <= start:
+            return {"ok": False, "error": "delegate empty result", "persons": [],
+                    "backend": "delegate", "image": None}
+        res = json.loads(text[start:end + 1])
+    except Exception as e:
+        return {"ok": False, "error": "delegate json err: " + str(e)[:200],
+                "persons": [], "backend": "delegate", "image": None}
+    if not res or not isinstance(res, dict):
+        return {"ok": False, "error": "delegate empty result", "persons": [], "backend": "delegate", "image": None}
+    # --image JSON มี saved/image/has_person ครบ (หลังแก้ CLI ให้พิมพ์ JSON ก้อนเดียว)
+    out = {"ok": bool(res.get("ok", True)), "persons": res.get("persons", []),
+           "backend": res.get("backend", "delegate"),
+           "has_person": bool(res.get("has_person", len(res.get("persons", [])) > 0)),
+           "image": str(src), "saved": None,
+           "error": res.get("error")}
+    # ดึงภาพ annotate กลับเฉพาะเมื่อเจอคน (ประหยัด WiFi)
+    ann = res.get("saved") or res.get("image")
+    # person_detect --image ฝั่ง delegate: annotate เก็บที่ OUTPUT_DIR ฝั่งนั้น ถ้ามี persons จะมีบรรทัด annotated ->
+    # แต่ JSON มีแค่ persons/backend — ลองหาไฟล์ saved จาก stdout ไม่ได้ จึงดึง ann ถ้าเป็น path remote
+    if out["has_person"] and ann and str(ann).startswith("/"):
+        local = Path("/tmp") / Path(str(ann)).name
+        try:
+            sr = subprocess.run(scp_base + [target + ":" + str(ann), str(local)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+            if sr.returncode == 0 and local.exists() and local.stat().st_size > 1000:
+                out["saved"] = str(local)
+        except Exception as e:
+            log.warning("delegate scp annotated err: " + str(e))
+    # ถ้าดึง annotated ไม่ได้ (JSON ไม่มี path) — ใช้ภาพต้นฉบับแทน ผู้รับยังเห็นครึ่งตัวครบ
+    return out
 
 def init_db():
     con = sqlite3.connect(DB_PATH)
@@ -236,18 +335,26 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ffmpeg status (จำเป็นสำหรับ /snapshot /clip)
     ff = _ffmpeg_found()
     lines.append(f"FFmpeg: {'✅ ' + str(ff) if ff else '❌ หาย — รัน install-deps.ps1'}")
-    # Person backend status
+    # Person backend status (รวม delegate — Z2W ไม่มี torch แต่สั่ง .94 ทำแทนได้)
     if HAS_PERSON:
         has_cv2, has_yolo = _person_check_deps()
-        backend = "YOLOv8n ✅" if has_yolo else ("motion fallback" if has_cv2 else "ไม่มี AI — ใช้ NVR Motion")
-        lines.append(f"Person: {backend} auto={'ON' if person_auto_enabled else 'OFF'}")
+        p_cfg = cfg.get("person", {})
+        delegate = (p_cfg.get("delegate_ssh") or "").strip()
+        conf = p_cfg.get("conf_threshold", CONF_DEFAULT)
+        if delegate:
+            backend = "YOLOv8n ✅ (delegate " + delegate + ")"
+        else:
+            backend = "YOLOv8n ✅" if has_yolo else ("motion fallback" if has_cv2 else "ไม่มี AI — ใช้ NVR Motion")
+        lines.append("Person: " + backend + " conf>" + str(conf)
+                     + " auto=" + ("ON" if person_auto_enabled else "OFF"))
     if HAS_REC:
         rec_cfg = cfg.get("event_rec", {})
         lines.append(f"EventRec: ✅ พร้อม (เฉพาะ event {rec_cfg.get('secs', 30)}วิ quota {rec_cfg.get('quota_mb', 4096)}MB)")
     else:
         lines.append("EventRec: ❌ (ไม่มี event_record.py — ใช้ /clip แทน)")
-    lines.append(f"PiCam: {'✅ พร้อม /picam' if HAS_PICAM else '❌ (ไม่มี picam.py)'}")
-    lines.append(f"\nคำสั่ง: /snapshot /picam /clip [วินาที] /person [/person_auto] /rec [วินาที] /events [/event #] /status /reboot")
+    lines.append(f"PiCam: {'✅ พร้อม /picam' if HAS_PICAM else '❌ (ไม่มี picam.py)'}"
+                 + (f" picam_auto={'ON' if picam_auto_enabled else 'OFF'}" if HAS_PICAM and HAS_PERSON else ""))
+    lines.append("\nคำสั่ง: /snapshot /picam /picam_person [conf] /clip [วินาที] /person [conf] [clip] /person_auto /picam_auto /rec [วินาที] /events [/event #] /status /reboot")
     await update.message.reply_text("\n".join(lines)[:4000])
 
 def _ffmpeg_found():
@@ -448,6 +555,71 @@ async def cmd_picam(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except OSError:
                 pass
 
+async def cmd_picam_person(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/picam_person [conf] — ถ่าย PiCam (CSI) แล้วส่งให้ YOLO ฝั่ง delegate สแกนหาคนครึ่งตัว
+
+    PiCam ไม่มี RTSP — delegate ดึงเองไม่ได้ ต้อง scp ภาพขึ้นไป (ดู _person_scan_image_delegated)
+    ใช้ค่า conf/imgsz เดียวกับ /person (default 0.35/960 จับครึ่งตัว)
+    """
+    if not HAS_PICAM:
+        await update.message.reply_text("PiCam ยังไม่พร้อม — ไม่มี picam.py บนเครื่องนี้")
+        return
+    if not HAS_PERSON:
+        await update.message.reply_text("Person detect ยังไม่พร้อม — ติดตั้ง: pip install ultralytics opencv-python")
+        return
+    cfg = load_cfg()
+    conf = float(cfg.get("person", {}).get("conf_threshold", CONF_DEFAULT))
+    if context.args:
+        try:
+            conf = max(0.2, min(0.9, float(context.args[0])))
+        except Exception:
+            pass
+    lock = context.application.bot_data.setdefault("picam_lock", asyncio.Lock())
+    if lock.locked():
+        await update.message.reply_text("กำลังถ่ายอยู่ รอสักครู่แล้วลองใหม่")
+        return
+    async with lock:
+        tmp = _tmp_file("picam_person.jpg")
+        await update.message.reply_text("PiCam กำลังถ่าย + ส่งให้ YOLO สแกน (conf>" + str(conf) + ") ...")
+        try:
+            loop = asyncio.get_running_loop()
+            cap = await loop.run_in_executor(None, lambda: picam_capture(str(tmp)))
+            if not cap.get("ok"):
+                await update.message.reply_text("ถ่ายไม่สำเร็จ: " + str(cap.get("error")))
+                return
+            small = _shrink_for_tg(Path(cap["file"]))
+            eff_imgsz = int(cfg.get("person", {}).get("imgsz", IMGSZ_DEFAULT))
+            res = await loop.run_in_executor(
+                None, lambda: _person_scan_image_delegated(cfg, str(small), conf, eff_imgsz))
+            if res is None:
+                # ไม่ตั้ง delegate — สแกนบนเครื่องนี้ (Z2W จะ fallback motion ถ้าไม่มี torch)
+                persons, backend = await loop.run_in_executor(
+                    None, lambda: detect_person(str(small), conf=conf, imgsz=eff_imgsz))
+                res = {"ok": True, "persons": persons, "backend": backend,
+                       "has_person": len(persons) > 0, "image": str(small), "saved": None}
+            if not res.get("ok"):
+                await update.message.reply_text("สแกนไม่สำเร็จ: " + str(res.get("error")))
+                return
+            persons = res.get("persons", [])
+            if persons:
+                img_path = res.get("saved") or res.get("image") or str(small)
+                confs = ", ".join([str(p.get("conf", "?")) for p in persons])
+                cap_text = ("PiCam YOLO " + str(res.get("backend")) + " — เจอ "
+                            + str(len(persons)) + " คน (conf " + confs + ")")
+                with open(img_path, "rb") as f:
+                    await update.message.reply_photo(photo=f, caption=cap_text)
+            else:
+                await update.message.reply_text("PiCam YOLO " + str(res.get("backend"))
+                                                + " — ไม่เจอคน (conf>" + str(conf) + ")")
+        except Exception as e:
+            log.exception("picam_person err")
+            await update.message.reply_text("picam_person error: " + str(e))
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
 async def cmd_person(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Phase 3: /person — สแกนภาพล่าสุดหา 'คน' ด้วย YOLOv8n"""
     if not HAS_PERSON:
@@ -456,19 +628,28 @@ async def cmd_person(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cfg = load_cfg()
     ipc = cfg.get("ipc", [{}])[0]
     rtsp = ipc.get("rtsp") or "rtsp://admin:123456@192.168.1.21:554/0"
-    # conf threshold param เช่น /person 0.6
-    conf = 0.5
+    # conf threshold param เช่น /person 0.6 [clip_secs] — default 0.35 จับครึ่งตัวได้
+    conf = float(cfg.get("person", {}).get("conf_threshold", CONF_DEFAULT))
+    clip_secs = int(cfg.get("person", {}).get("clip_secs", 0))
     if context.args:
         try:
             conf = max(0.2, min(0.9, float(context.args[0])))
         except:
             pass
+        if len(context.args) > 1:
+            try:
+                clip_secs = max(0, min(10, int(context.args[1])))
+            except:
+                pass
     await update.message.reply_text(f"กำลังสแกนหาคน (conf>{conf}) จาก {ipc.get('ip')} ...")
     try:
         # ถ้าตั้ง person.delegate_ssh — มอบ YOLO ให้เครื่องอื่นทำ (Z2W ไม่มี torch)
-        res = _person_scan_delegated(cfg, conf)
+        res = _person_scan_delegated(cfg, conf, clip_secs=clip_secs)
         if res is None:
-            res = scan_snapshot(rtsp, conf=conf, save=True)
+            if clip_secs > 0:
+                res = scan_clip(rtsp, secs=clip_secs, conf=conf)
+            else:
+                res = scan_snapshot(rtsp, conf=conf, save=True)
         if not res.get("ok"):
             await update.message.reply_text(f"สแกนไม่สำเร็จ: {res.get('error')}")
             return
@@ -501,6 +682,27 @@ async def cmd_person_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         person_auto_enabled = not person_auto_enabled
     await update.message.reply_text(f"Person auto {'เปิด ✅ (ทุก 30วิ)' if person_auto_enabled else 'ปิด ❌'} — ใช้ /person เพื่อสแกนครั้งเดียว")
+
+
+async def cmd_picam_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/picam_auto [on/off] — Toggle auto PiCam watch (CSI ov5647 ส่ง delegate YOLO)
+
+    ถ่าย PiCam ทุก picam_auto_interval (default 90วิ) แล้ว scp ขึ้น delegate สแกนครึ่งตัว
+    แยก loop จาก person_auto (IPC RTSP) เพราะ PiCam ถ่ายช้า ~5วิ/ใบ + ส่ง SSH ~5-10วิ
+    ใช้ visit dedup + cooldown เดียวกับ person (กันคนนั่งเดิมแจ้งซ้ำ)
+    """
+    global picam_auto_enabled
+    if context.args and context.args[0].lower() in ("on", "1", "enable", "เปิด"):
+        picam_auto_enabled = True
+    elif context.args and context.args[0].lower() in ("off", "0", "disable", "ปิด"):
+        picam_auto_enabled = False
+    else:
+        picam_auto_enabled = not picam_auto_enabled
+    cfg = load_cfg()
+    iv = int(cfg.get("person", {}).get("picam_auto_interval", 90))
+    await update.message.reply_text(
+        "PiCam auto " + ("เปิด ✅ (ทุก " + str(iv) + "วิ ส่ง delegate YOLO)" if picam_auto_enabled else "ปิด ❌")
+        + " — ใช้ /picam_person เพื่อสแกนครั้งเดียว")
 
 
 async def cmd_rec(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -613,10 +815,12 @@ def start_telegram(cfg):
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("snapshot", cmd_snapshot))
     app.add_handler(CommandHandler("picam", cmd_picam))
+    app.add_handler(CommandHandler("picam_person", cmd_picam_person))
     app.add_handler(CommandHandler("clip", cmd_clip))
     if HAS_PERSON:
         app.add_handler(CommandHandler("person", cmd_person))
         app.add_handler(CommandHandler("person_auto", cmd_person_auto))
+        app.add_handler(CommandHandler("picam_auto", cmd_picam_auto))
         app.add_handler(CommandHandler("events", cmd_events))
         app.add_handler(CommandHandler("event", cmd_event))
     if HAS_REC:
@@ -717,7 +921,10 @@ def poll_once(cfg):
         log.warning(f"ffmpeg/rtsp alert err: {e}")
 
 def person_watch_loop(cfg, tg_app):
-    """Background loop: auto scan person every 30s when enabled (Phase 3).
+    """Background loop: auto scan person every N sec when enabled (Phase 3).
+
+    vote หลายเฟรม (person.clip_secs, default 5): คนเดินผ่านเร็ว/โผล่ครึ่งตัว
+    แค่ 1-2 เฟรมจาก 5 ก็นับว่าเจอ — แทนเฟรมเดียวที่พลาดจังหวะง่าย
 
     Pi4: ถ้าเจอคน + เปิด event_rec.record_on_person -> อัดคลิป event
     ลงเครื่อง (event_record.record_event) พร้อมส่งภาพนิ่งเตือน.
@@ -737,11 +944,15 @@ def person_watch_loop(cfg, tg_app):
             if person_auto_enabled and HAS_PERSON:
                 ipc = cfg.get("ipc", [{}])[0]
                 rtsp = ipc.get("rtsp") or "rtsp://admin:123456@192.168.1.21:554/0"
-                conf = cfg.get("person", {}).get("conf_threshold", 0.5)
+                conf = float(cfg.get("person", {}).get("conf_threshold", CONF_DEFAULT))
+                clip_secs = int(cfg.get("person", {}).get("clip_secs", 5))
                 # delegate: สั่งสแกนผ่านเครื่องอื่นที่มี torch (Z2W → Gateway/Pi4) — None = สแกนบนเครื่องนี้
-                res = _person_scan_delegated(cfg, conf)
+                res = _person_scan_delegated(cfg, conf, clip_secs=clip_secs)
                 if res is None:
-                    res = scan_snapshot(rtsp, conf=conf, save=False)
+                    if clip_secs > 0:
+                        res = scan_clip(rtsp, secs=clip_secs, conf=conf)
+                    else:
+                        res = scan_snapshot(rtsp, conf=conf, save=False)
                 if res.get("has_person"):
                     now = time.time()
                     last_seen_ts = now
@@ -838,14 +1049,107 @@ def person_watch_loop(cfg, tg_app):
         time.sleep(cfg.get("person", {}).get("auto_interval", PERSON_AUTO_INTERVAL))
 
 
+def picam_watch_loop(cfg, tg_app):
+    """Background loop: auto PiCam watch — ถ่าย CSI ทุก N วิ ส่ง delegate YOLO
+
+    แยกจาก person_watch_loop (IPC RTSP ทุก 15วิ) เพราะ PiCam ถ่ายช้า ~5วิ/ใบ
+    + scp/ssh delegate ~5-10วิ (interval default 90วิ ห้ามต่ำกว่า 60).
+    ใช้ visit dedup ชุดเดียวกับ person (คนนั่งเดิม = 1 เหตุการณ์ ไม่แจ้งซ้ำ).
+    Z2W ห้ามอัดคลิป (SD พัง) — ส่งแค่ภาพนิ่ง annotate.
+    """
+    global last_picam_alert, person_visit_active, person_visit_since, person_event_seq, last_seen_ts
+    new_visit_gap = int(cfg.get("person", {}).get("new_visit_gap", NEW_VISIT_GAP_SEC))
+    import threading as _th
+    lock = _th.Lock()
+    while True:
+        try:
+            if picam_auto_enabled and HAS_PICAM and HAS_PERSON:
+                conf = float(cfg.get("person", {}).get("conf_threshold", CONF_DEFAULT))
+                eff_imgsz = int(cfg.get("person", {}).get("imgsz", IMGSZ_DEFAULT))
+                if lock.locked():
+                    log.info("picam_auto skip — กล้องกำลังถ่ายอยู่ (lock)")
+                else:
+                    with lock:
+                        _picam_watch_once(cfg, tg_app, conf, eff_imgsz, new_visit_gap)
+        except Exception as e:
+            log.warning("picam_watch err: " + str(e))
+        time.sleep(int(cfg.get("person", {}).get("picam_auto_interval", 90)))
+
+
+def _picam_watch_once(cfg, tg_app, conf, eff_imgsz, new_visit_gap):
+    """ถ่าย 1 ใบ + สแกน delegate + แจ้งเตือน (visit dedup) — เรียกจาก picam_watch_loop"""
+    global last_picam_alert, person_visit_active, person_visit_since, person_event_seq, last_seen_ts
+    tmp = _tmp_file("picam_auto.jpg")
+    try:
+        cap = picam_capture(str(tmp))
+    except Exception as e:
+        log.warning("picam_auto capture err: " + str(e))
+        return
+    try:
+        if not cap.get("ok"):
+            log.warning("picam_auto capture fail: " + str(cap.get("error")))
+            return
+        small = _shrink_for_tg(Path(cap["file"]))
+        res = _person_scan_image_delegated(cfg, str(small), conf, eff_imgsz)
+        if res is None:
+            persons, backend = detect_person(str(small), conf=conf, imgsz=eff_imgsz)
+            res = {"ok": True, "persons": persons, "backend": backend,
+                   "has_person": len(persons) > 0, "image": str(small), "saved": None}
+        if res.get("ok") and res.get("has_person"):
+            now = time.time()
+            last_seen_ts = now
+            persons = res.get("persons", [])
+            if not person_visit_active:
+                person_visit_active = True
+                person_visit_since = datetime.now()
+                img_path = res.get("saved") or res.get("image") or str(small)
+                person_event_seq = save_person_event(
+                    len(persons), persons, img_path, visit_start=person_visit_since) or 0
+                cap_txt = ("PiCam auto พบคน " + str(len(persons)) + " คน "
+                           + datetime.now().strftime("%H:%M:%S")
+                           + ((" — event #" + str(person_event_seq)) if person_event_seq else ""))
+                last_picam_alert = now
+                if tg_app and Path(img_path).exists():
+                    chat_ids = cfg.get("telegram", {}).get("allow_chat_ids", [])
+                    token = cfg.get("telegram", {}).get("token")
+                    if chat_ids and token:
+                        import requests
+                        for cid in chat_ids:
+                            try:
+                                with open(img_path, "rb") as f:
+                                    requests.post(
+                                        "https://api.telegram.org/bot" + token + "/sendPhoto",
+                                        data={"chat_id": cid, "caption": cap_txt},
+                                        files={"photo": f}, timeout=20)
+                            except Exception as e:
+                                log.warning("picam_auto send fail: " + str(e))
+                log.info("picam_auto alert sent " + str(len(persons)) + " persons")
+            else:
+                log.info("picam_auto visit ongoing — ข้าม (กัน duplicate)")
+        elif isinstance(res, dict) and not res.get("has_person"):
+            if person_visit_active and last_seen_ts and (time.time() - last_seen_ts) > new_visit_gap:
+                person_visit_active = False
+                log.info("picam_auto visit closed")
+        else:
+            log.warning("picam_auto scan fail: " + str(res.get("error")))
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def main():
-    global person_auto_enabled
+    global person_auto_enabled, picam_auto_enabled
     cfg = load_cfg()
     init_db()
     # เปิด auto person watch ตั้งแต่ boot ได้ด้วย person.auto_start: true (ไม่ต้องสั่ง /person_auto ใหม่หลัง restart)
     if cfg.get("person", {}).get("auto_start", False):
         person_auto_enabled = True
         log.info("person_auto ON (auto_start from config)")
+    if cfg.get("person", {}).get("picam_auto_enabled", False):
+        picam_auto_enabled = True
+        log.info("picam_auto ON (auto_start from config)")
     log.info("Pi Z2W CCTV Bot starting — interval %ss", CHECK_INTERVAL)
     tg_app = start_telegram(cfg)
     # Fix for Python 3.13: run health polling in thread, Telegram polling in main thread
@@ -866,6 +1170,11 @@ def main():
             threading.Thread(target=person_watch_loop, args=(cfg, tg_app), daemon=True).start()
             log.info("person_watch thread started (auto=%s, toggle via /person_auto)",
                      "ON" if person_auto_enabled else "OFF")
+        # PiCam auto watch thread — แยก loop ถ่าย CSI ทุก 90วิ ส่ง delegate YOLO
+        if HAS_PICAM and HAS_PERSON:
+            threading.Thread(target=picam_watch_loop, args=(cfg, tg_app), daemon=True).start()
+            log.info("picam_watch thread started (auto=%s, toggle via /picam_auto)",
+                     "ON" if picam_auto_enabled else "OFF")
         log.info("Telegram bot polling started (main thread)")
         tg_app.run_polling()
     else:

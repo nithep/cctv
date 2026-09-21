@@ -32,9 +32,17 @@ smart_plug:
 person:
   enabled: true
   model: yolov8n.pt
-  conf_threshold: 0.5
-  auto_interval: 30
+  conf_threshold: 0.35
+  imgsz: 960
+  clip_secs: 5
+  auto_interval: 15
   cooldown: 300
+  # picam_auto: ถ่าย PiCam (CSI) ทุก N วิแล้วส่ง delegate สแกนครึ่งตัวอัตโนมัติ
+  # PiCam ถ่ายช้า (~5วิ/ใบ) + ส่ง SSH (~5-10วิ) — อย่าตั้งต่ำกว่า 60 (default 90)
+  # แยกจาก person_auto (IPC RTSP ทุก 15วิ) เพราะใช้ picam_lock ตัวเดียวกันกับ /picam
+  picam_auto_enabled: false
+  picam_auto_interval: 90
+  picam_cooldown: 300
   save_dir: ../output/person
   # true = เปิด auto person watch เองตอน boot (ไม่ต้องสั่ง /person_auto on ใหม่หลัง restart)
   auto_start: false

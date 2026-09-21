@@ -16,7 +16,8 @@ RECOMMENDED = [
     "ipc[0].ip", "ipc[0].rtsp",            # จำเป็นสำหรับ /snapshot /clip /person
     "alerts.rtsp_down_secs",               # ใหม่: เตือน RTSP ล่มเกินกี่วินาที
     "event_rec.record_on_person", "event_rec.secs", "event_rec.quota_mb",
-    "person.conf_threshold",
+    "person.conf_threshold", "person.imgsz", "person.clip_secs",
+    "person.picam_auto_interval", "person.picam_cooldown",
 ]
 SECRET_KEYS = {"token", "pass", "password", "secret"}
 

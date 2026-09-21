@@ -94,7 +94,8 @@ def _torch_ok() -> bool:
                     "(แก้: pip install --force-reinstall torch torchvision ตัว aarch64 สำหรับ Pi4)")
     return _TORCH_OK
 
-CONF_DEFAULT = 0.5
+CONF_DEFAULT = 0.35
+IMGSZ_DEFAULT = 960
 MODEL_DEFAULT = "yolov8n.pt"
 
 
@@ -170,13 +171,17 @@ def capture_snapshot(rtsp_url, tmp_path=None, timeout=15):
         return None
 
 
-def detect_person_yolo(image_path, conf=CONF_DEFAULT, model_name=MODEL_DEFAULT):
-    """Run YOLOv8n person (class 0) detection. Returns list of dicts."""
+def detect_person_yolo(image_path, conf=CONF_DEFAULT, model_name=MODEL_DEFAULT, imgsz=IMGSZ_DEFAULT):
+    """Run YOLOv8n person (class 0) detection. Returns list of dicts.
+
+    imgsz 960 (เดิม 640) — จับคนครึ่งตัว/ตัวเล็ก/ไกลจาก 1080p ได้ดีขึ้น
+    ~20-30% ช้าลงนิดเดียวบน Pi4/Gateway รับได้ (ช้าไปลดเป็น 800)
+    """
     model = get_yolo_model(model_name)
     if model is None:
         return None  # signal fallback
     try:
-        results = model(str(image_path), verbose=False, conf=conf)
+        results = model(str(image_path), verbose=False, conf=conf, imgsz=imgsz)
         persons = []
         for r in results:
             for box in r.boxes:
@@ -200,11 +205,11 @@ def detect_motion_fallback(image_path, prev_path=None):
     return []
 
 
-def detect_person(image_path, conf=CONF_DEFAULT, model_name=MODEL_DEFAULT, use_fallback=True):
+def detect_person(image_path, conf=CONF_DEFAULT, model_name=MODEL_DEFAULT, use_fallback=True, imgsz=IMGSZ_DEFAULT):
     """Unified entry: YOLO if available else motion fallback. Returns (persons, backend)."""
     has_cv2, has_yolo = _check_deps()
     if has_yolo:
-        persons = detect_person_yolo(image_path, conf=conf, model_name=model_name)
+        persons = detect_person_yolo(image_path, conf=conf, model_name=model_name, imgsz=imgsz)
         if persons is not None:
             return persons, "yolo"
     if use_fallback:
@@ -239,12 +244,12 @@ def annotate_image(image_path, persons, out_path=None):
         return Path(image_path)
 
 
-def scan_snapshot(rtsp_url, conf=CONF_DEFAULT, save=True):
+def scan_snapshot(rtsp_url, conf=CONF_DEFAULT, save=True, imgsz=IMGSZ_DEFAULT):
     """Capture + detect in one call. Saves to output/person/ if person found."""
     tmp = capture_snapshot(rtsp_url)
     if tmp is None:
         return {"ok": False, "error": "snapshot failed", "persons": [], "backend": "none", "image": None}
-    persons, backend = detect_person(tmp, conf=conf)
+    persons, backend = detect_person(tmp, conf=conf, imgsz=imgsz)
     result = {
         "ok": True,
         "persons": persons,
@@ -292,8 +297,12 @@ def extract_clip_frames(rtsp_url, secs=10, fps=1, tmp_dir=None):
         return []
 
 
-def scan_clip(rtsp_url, secs=10, conf=CONF_DEFAULT):
-    """Scan recent clip for persons frame-by-frame. Returns summary."""
+def scan_clip(rtsp_url, secs=10, conf=CONF_DEFAULT, imgsz=IMGSZ_DEFAULT):
+    """Scan recent clip for persons frame-by-frame. Returns summary.
+
+    โหวตหลายเฟรม: คนเดินผ่านเร็ว/โผล่ครึ่งตัวแค่ 1-2 เฟรมจาก 5 ก็นับว่าเจอ
+    (แก้ปัญหาเฟรมเดียวทุก 30วิพลาดจังหวะครึ่งตัว)
+    """
     frames = extract_clip_frames(rtsp_url, secs=secs)
     if not frames:
         return {"ok": False, "error": "no frames extracted", "persons": [], "frames": 0}
@@ -301,7 +310,7 @@ def scan_clip(rtsp_url, secs=10, conf=CONF_DEFAULT):
     hit_frames = 0
     saved = None
     for fp in frames:
-        persons, backend = detect_person(fp, conf=conf)
+        persons, backend = detect_person(fp, conf=conf, imgsz=imgsz)
         if persons:
             hit_frames += 1
             all_persons.extend(persons)
@@ -326,22 +335,30 @@ if __name__ == "__main__":
     ap.add_argument("--rtsp", help="RTSP url to capture + scan")
     ap.add_argument("--clip", type=int, help="scan clip secs from RTSP")
     ap.add_argument("--conf", type=float, default=CONF_DEFAULT)
+    ap.add_argument("--imgsz", type=int, default=IMGSZ_DEFAULT)
     ap.add_argument("--model", default=MODEL_DEFAULT)
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO)
 
     if args.image:
-        persons, backend = detect_person(args.image, conf=args.conf, model_name=args.model)
-        print(json.dumps({"backend": backend, "persons": persons, "count": len(persons)}, indent=2, ensure_ascii=False))
+        persons, backend = detect_person(args.image, conf=args.conf, model_name=args.model, imgsz=args.imgsz)
+        saved = None
         if persons:
-            out = annotate_image(args.image, persons)
-            print(f"annotated -> {out}")
+            try:
+                out = annotate_image(args.image, persons)
+                saved = str(out)
+                print("annotated -> " + str(out))
+            except Exception as e:
+                print("annotate failed: " + str(e)[:200])
+        print(json.dumps({"backend": backend, "persons": persons, "count": len(persons),
+                          "saved": saved, "image": str(args.image),
+                          "has_person": len(persons) > 0, "ok": True}, indent=2, ensure_ascii=False))
     elif args.rtsp:
         if args.clip:
-            res = scan_clip(args.rtsp, secs=args.clip, conf=args.conf)
+            res = scan_clip(args.rtsp, secs=args.clip, conf=args.conf, imgsz=args.imgsz)
             print(json.dumps(res, indent=2, ensure_ascii=False))
         else:
-            res = scan_snapshot(args.rtsp, conf=args.conf)
+            res = scan_snapshot(args.rtsp, conf=args.conf, imgsz=args.imgsz)
             # convert Path to str for json
             print(json.dumps({k: str(v) if isinstance(v, Path) else v for k, v in res.items()}, indent=2, ensure_ascii=False))
     else:
